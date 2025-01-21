@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BRKN.PROMISES</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: monospace;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        h1 {
+            font-size: 2em;
+            margin-bottom: 1em;
+            color: #0f0;
+            text-shadow: 0 0 5px #0f0;
+        }
+
+        .input-container {
+            margin-bottom: 2em;
+        }
+
+        input[type="url"], input[type="text"] {
+            width: 70%;
+            padding: 10px;
+            background: #111;
+            border: 1px solid #0f0;
+            color: #0f0;
+            font-family: monospace;
+            margin-top: 10px;
+        }
+
+        input[type="url"]:focus, input[type="text"]:focus {
+            outline: none;
+            box-shadow: 0 0 5px #0f0;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #0f0;
+            border: none;
+            color: #000;
+            cursor: pointer;
+            font-family: monospace;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: #0f0;
+            box-shadow: 0 0 10px #0f0;
+        }
+
+        #map-container {
+            border: 1px solid #0f0;
+            height: 500px;
+            position: relative;
+            overflow: hidden;
+            margin-top: 2em;
+        }
+
+        .url-point {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: #0f0;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+            z-index: 2;
+        }
+
+        .url-info {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 10px;
+            border: 1px solid #0f0;
+            display: none;
+            z-index: 1000;
+            font-size: 0.9em;
+        }
+
+        .error-message, .success-message {
+            color: #f00;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .success-message {
+            color: #0f0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BRKN.PROMISES: Mapping Digital Ruins</h1>
+        
+        <div class="input-container">
+            <input type="url" id="url-input" placeholder="Enter a URL (e.g., example.com)" required>
+            <input type="text" id="legend-input" placeholder="Añade una leyenda para esta URL" required>
+            <button onclick="checkURL()">HUNT</button>
+            <div class="error-message" id="error-message"></div>
+            <div class="success-message" id="success-message"></div>
+        </div>
+
+        <div id="map-container"></div>
+        <div class="url-info" id="url-info"></div>
+    </div>
+
+    <script>
+        const mapContainer = document.getElementById('map-container');
+        const urlInfo = document.getElementById('url-info');
+        const connectionLines = document.getElementById('connection-lines');
+        const errorMessage = document.getElementById('error-message');
+        const successMessage = document.getElementById('success-message');
+        let urls = new Set();
+
+        // Load saved URLs
+        loadSavedURLs();
+
+        function loadSavedURLs() {
+            try {
+                const savedURLs = JSON.parse(localStorage.getItem('brokenURLs') || '[]');
+                savedURLs.forEach(urlData => {
+                    urls.add(urlData.fullUrl);
+                    addURLToMap(urlData, false);
+                });
+            } catch (error) {
+                console.error('Error loading saved URLs:', error);
+            }
+        }
+
+        function saveURLs() {
+            try {
+                const urlsArray = Array.from(document.querySelectorAll('.url-point')).map(point => ({
+                    fullUrl: point.getAttribute('data-url'),
+                    domain: point.getAttribute('data-domain'),
+                    extension: point.getAttribute('data-extension'),
+                    timestamp: point.getAttribute('data-timestamp')
+                }));
+                localStorage.setItem('brokenURLs', JSON.stringify(urlsArray));
+            } catch (error) {
+                console.error('Error saving URLs:', error);
+            }
+        }
+
+        function parseURL(url) {
+            try {
+                // Remover espacios en blanco
+                url = url.trim();
+                
+                // Remover cualquier protocolo existente
+                url = url.replace(/^(https?:\/\/)/i, '');
+                
+                // Remover www. si existe
+                url = url.replace(/^www\./i, '');
+                
+                // Añadir el protocolo
+                url = 'http://' + url;
+                
+                const urlObj = new URL(url);
+                return {
+                    domain: urlObj.hostname.replace(/^www\./i, ''),
+                    extension: urlObj.hostname.split('.').pop(),
+                    fullUrl: url,
+                    timestamp: new Date().toISOString()
+                };
+            } catch (e) {
+                console.error('Error parsing URL:', e);
+                return null;
+            }
+        }
+
+        function calculateCoordinates(urlData) {
+            const domainHash = urlData.domain.split('')
+                .reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            
+            const containerWidth = mapContainer.offsetWidth;
+            const containerHeight = mapContainer.offsetHeight;
+            
+            const extensionMap = {
+                'com': 0.2,
+                'org': 0.4,
+                'net': 0.6,
+                'edu': 0.8,
+                'io': 0.3,
+                'dev': 0.5,
+                'app': 0.7
+            };
+            
+            const x = (domainHash % containerWidth) / containerWidth * 100;
+            const y = (extensionMap[urlData.extension] || 0.9) * 100;
+            
+            return { x, y };
+        }
+
+        async function checkURL() {
+            const urlInput = document.getElementById('url-input');
+            const url = urlInput.value;
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+            
+            if (!url) {
+                showError('Please enter a URL');
+                return;
+            }
+            
+            const urlData = parseURL(url);
+            if (!urlData) {
+                showError('Invalid URL format');
+                return;
+            }
+
+            if (urls.has(urlData.fullUrl)) {
+                showError('This digital ghost has already been mapped');
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:5000/check-url', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    body: JSON.stringify({ url: url }),
+                    mode: 'cors'
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    showError('Error checking URL: ' + data.error);
+                    return;
+                }
+
+                if (!data.is_broken) {
+                    showError('This URL is still alive. Please try with a broken one');
+                    return;
+                }
+
+                urlData.timestamp = data.timestamp;
+                addURLToMap(urlData);
+                showSuccess('Digital ghost mapped successfully');
+                urlInput.value = '';
+            } catch (error) {
+                showError('Error connecting to verification service. Please try again');
+            }
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            setTimeout(() => {
+                errorMessage.style.display = 'none';
+            }, 3000);
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            setTimeout(() => {
+                successMessage.style.display = 'none';
+            }, 3000);
+        }
+
+        function addURLToMap(urlData, shouldSave = true) {
+            urls.add(urlData.fullUrl);
+            const coords = calculateCoordinates(urlData);
+            
+            const point = document.createElement('div');
+            point.className = 'url-point';
+            point.style.left = `${coords.x}%`;
+            point.style.top = `${coords.y}%`;
+            
+            point.setAttribute('data-url', urlData.fullUrl);
+            point.setAttribute('data-domain', urlData.domain);
+            point.setAttribute('data-extension', urlData.extension);
+            point.setAttribute('data-timestamp', urlData.timestamp);
+            
+            point.addEventListener('mouseover', () => {
+                const date = new Date(urlData.timestamp).toLocaleString();
+                urlInfo.innerHTML = `
+                    <strong>Lost URL:</strong> ${urlData.fullUrl}<br>
+                    <small>Mapped: ${date}</small>
+                `;
+                urlInfo.style.display = 'block';
+            });
+            
+            point.addEventListener('mouseout', () => {
+                urlInfo.style.display = 'none';
+            });
+            
+            mapContainer.appendChild(point);
+            updateConnections();
+            if (shouldSave) {
+                saveURLs();
+            }
+        }
+
+        function updateConnections() {
+            const points = document.querySelectorAll('.url-point');
+            connectionLines.innerHTML = '';
+            
+            points.forEach((point, i) => {
+                const x1 = parseFloat(point.style.left);
+                const y1 = parseFloat(point.style.top);
+                
+                const connections = [];
+                points.forEach((otherPoint, j) => {
+                    if (i !== j) {
+                        const x2 = parseFloat(otherPoint.style.left);
+                        const y2 = parseFloat(otherPoint.style.top);
+                        const distance = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+                        connections.push({ point: otherPoint, distance });
+                    }
+                });
+                
+                connections.sort((a, b) => a.distance - b.distance);
+                connections.slice(0, 2).forEach(conn => {
+                    const x2 = parseFloat(conn.point.style.left);
+                    const y2 = parseFloat(conn.point.style.top);
+                    
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', x1 + '%');
+                    line.setAttribute('y1', y1 + '%');
+                    line.setAttribute('x2', x2 + '%');
+                    line.setAttribute('y2', y2 + '%');
+                    line.setAttribute('stroke', 'rgba(0, 255, 0, 0.2)');
+                    line.setAttribute('stroke-width', '1');
+                    
+                    connectionLines.appendChild(line);
+                });
+            });
+        }
+
+        window.addEventListener('resize', updateConnections);
+
+        document.getElementById('url-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                checkURL();
+            }
+        });
+        function loadSavedURLs() {
+    try {
+        const savedURLs = JSON.parse(localStorage.getItem('brokenURLs') || '[]');
+        savedURLs.forEach(urlData => {
+            urls.add(urlData.fullUrl);
+            addURLToMap(urlData, false);
+        });
+    } catch (error) {
+        console.error('Error loading saved URLs:', error);
+    }
+}
+
+function saveURLs() {
+    try {
+        const urlsArray = Array.from(document.querySelectorAll('.url-point')).map(point => ({
+            fullUrl: point.getAttribute('data-url'),
+            domain: point.getAttribute('data-domain'),
+            extension: point.getAttribute('data-extension'),
+            timestamp: point.getAttribute('data-timestamp'),
+            legend: point.getAttribute('data-legend')
+        }));
+        localStorage.setItem('brokenURLs', JSON.stringify(urlsArray));
+    } catch (error) {
+        console.error('Error saving URLs:', error);
+    }
+}
+
+async function checkURL() {
+    const urlInput = document.getElementById('url-input');
+    const legendInput = document.getElementById('legend-input');
+    const url = urlInput.value;
+    const legend = legendInput.value;
+    
+    // ... existing validation code ...
+
+    try {
+        // ... existing fetch code ...
+
+        if (!data.is_broken) {
+            showError('This URL is still alive. Please try with a broken one');
+            return;
+        }
+
+        urlData.timestamp = data.timestamp;
+        urlData.legend = legend; // Añadimos la leyenda al objeto urlData
+        addURLToMap(urlData);
+        showSuccess('Digital ghost mapped successfully');
+        urlInput.value = '';
+        legendInput.value = '';
+    } catch (error) {
+        showError('Error connecting to verification service. Please try again');
+    }
+}
+function addURLToMap(urlData, shouldSave = true) {
+    urls.add(urlData.fullUrl);
+    const coords = calculateCoordinates(urlData);
+    
+    const point = document.createElement('div');
+    point.className = 'url-point';
+    point.style.left = `${coords.x}%`;
+    point.style.top = `${coords.y}%`;
+    
+    point.setAttribute('data-url', urlData.fullUrl);
+    point.setAttribute('data-domain', urlData.domain);
+    point.setAttribute('data-extension', urlData.extension);
+    point.setAttribute('data-timestamp', urlData.timestamp);
+    point.setAttribute('data-legend', urlData.legend || ''); // Añadimos la leyenda como atributo
+    
+    point.addEventListener('mouseover', () => {
+        const date = new Date(urlData.timestamp).toLocaleString();
+        urlInfo.innerHTML = `
+            <strong>Lost URL:</strong> ${urlData.fullUrl}<br>
+            <strong>Leyenda:</strong> ${urlData.legend || 'Sin leyenda'}<br>
+            <small>Mapped: ${date}</small>
+        `;
+        urlInfo.style.display = 'block';
+    });
+}
+
+    </script>
+</body>
+</html>
